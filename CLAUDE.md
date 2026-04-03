@@ -4,17 +4,26 @@
 
 This service provides news sentiment analysis for crypto trading signals. It ingests news articles, social media posts, and other textual content, then uses ML/NLP to extract sentiment and generate trading signals.
 
+**Owner:** ML Engineer
+**Port:** 8040
+**Stack:** Python 3.11 · FastAPI · Transformers/Torch · PostgreSQL · Redis
+
+---
+
 ## Tech Stack
 
-- **Python**: 3.11+
-- **Framework**: FastAPI
-- **ML/NLP**:
-  - `transformers` - Hugging Face models for sentiment analysis
-  - `torch` - PyTorch for model inference
-  - `scikit-learn` - Additional ML utilities
-- **Database**: PostgreSQL (via `asyncpg`)
-- **Caching**: Redis
-- **Logging**: `structlog`
+| Component | Library | Purpose |
+|-----------|---------|---------|
+| Web framework | FastAPI 0.115+ | Async HTTP API |
+| ASGI server | Uvicorn | Production server |
+| ML/NLP | `transformers`, `torch`, `scikit-learn` | Sentiment analysis |
+| DB | `asyncpg` | PostgreSQL async driver |
+| Config | `pydantic-settings` | Environment-based settings |
+| Logging | `structlog` | Structured logging |
+
+**Python:** 3.11+ (enforced in `pyproject.toml` and Dockerfile)
+
+---
 
 ## Architecture
 
@@ -22,46 +31,77 @@ This service provides news sentiment analysis for crypto trading signals. It ing
 trading-news-analysis/
 ├── src/app/
 │   ├── api/
-│   │   └── v1.py          # FastAPI routes (/api/v1/*)
+│   │   └── v1.py              # FastAPI v1 routes
 │   ├── core/
-│   │   └── config.py      # Configuration management
+│   │   └── config.py          # Pydantic Settings (env prefix: NEWS_)
 │   ├── services/
-│   │   └── sentiment.py   # Sentiment analysis business logic
-│   └── main.py            # Application entry point
+│   │   └── sentiment.py       # SentimentAnalyzer (stub)
+│   └── main.py                # FastAPI app entry point
 ├── tests/
-│   └── test_api.py        # API tests
+│   └── test_api.py            # TestClient tests
 ├── Dockerfile
-└── pyproject.toml
+├── pyproject.toml
+└── CLAUDE.md
+```
+
+### Data Flow
+
+```
+News Sources → Ingestion (TODO) → SentimentAnalyzer → Redis Cache (TODO) → PostgreSQL
+                                        ↓
+                               Trading Core (:8010)
 ```
 
 ### Key Components
 
-- **`SentimentAnalyzer`** (`services/sentiment.py`): Core ML service for text sentiment analysis
-- **API v1 routes** (`api/v1.py`):
-  - `GET /api/v1/sentiment/{symbol}` - Get sentiment for trading symbol
-  - `POST /api/v1/analyze` - Analyze arbitrary news text
-- **FastAPI app** (`main.py`): HTTP server on port 8040
+| Component | Path | Responsibility |
+|-----------|------|----------------|
+| `SentimentAnalyzer` | `src/app/services/sentiment.py` | Core ML service — stub returning uniform sentiment scores |
+| `Settings` | `src/app/core/config.py` | Env config with `NEWS_` prefix (database_url, redis_url, log_level) |
+| API v1 router | `src/app/api/v1.py` | `/api/v1/sentiment/{symbol}`, `/api/v1/analyze` |
+| FastAPI app | `src/app/main.py` | App factory, `/health`, startup logger |
+
+### SentimentResponse Schema
+
+```python
+{
+    "sentiment": str,      # "positive" | "negative" | "neutral"
+    "score": float,        # Raw sentiment score (-1.0 to 1.0)
+    "confidence": float     # Model confidence (0.0 to 1.0)
+}
+```
+
+---
 
 ## Local Development
+
+### Prerequisites
+
+- Python 3.11+
+- PostgreSQL (or set `NEWS_DATABASE_URL`)
+- Redis (or set `NEWS_REDIS_URL`)
 
 ### Setup
 
 ```bash
-# Install dependencies
+# Clone and enter repo
+cd services/trading-news-analysis
+
+# Install with dev deps
 pip install -e ".[dev]"
 
-# Run tests
-pytest
+# Lint
+ruff check .
 
-# Run with coverage
-pytest --cov=app
+# Type-check
+mypy .
 ```
 
 ### Running
 
 ```bash
-# Direct (for development)
-uvicorn app.main:app --reload
+# Direct (development — reload enabled)
+uvicorn app.main:app --reload --port 8040
 
 # With Docker
 docker build -t trading-news-analysis .
@@ -70,43 +110,87 @@ docker run -p 8040:8040 trading-news-analysis
 
 ### Environment Variables
 
-- `NEWS_DATABASE_URL` - PostgreSQL connection string
-- `NEWS_REDIS_URL` - Redis connection string
-- `NEWS_LOG_LEVEL` - Logging level (default: INFO)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NEWS_DATABASE_URL` | `postgresql://localhost/trading_news` | PostgreSQL DSN |
+| `NEWS_REDIS_URL` | `redis://localhost/2` | Redis DSN |
+| `NEWS_LOG_LEVEL` | `INFO` | Logging level |
+
+---
 
 ## Testing
 
 ```bash
-# Run all tests
+# All tests
 pytest
 
-# Run specific test
+# Specific test
 pytest tests/test_api.py::test_health_check
 
-# With coverage report
+# With coverage
 pytest --cov=app --cov-report=html
 ```
 
-## API Summary
+**Current test coverage:** `test_health_check` only — `test_sentiment_endpoint` and `test_analyze_endpoint` stubs exist but are not yet implemented.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/api/v1/sentiment/{symbol}` | GET | Get sentiment for symbol |
-| `/api/v1/analyze` | POST | Analyze news text |
+---
+
+## API Reference
+
+### Endpoints
+
+| Method | Path | Description | Response |
+|--------|------|-------------|----------|
+| `GET` | `/health` | Liveness probe | `{"status": "healthy"}` |
+| `GET` | `/api/v1/sentiment/{symbol}` | Sentiment for trading symbol | `SentimentResponse` |
+| `POST` | `/api/v1/analyze` | Analyze arbitrary text | `SentimentResponse` |
+
+All responses: `200 OK` with JSON body.
+
+---
 
 ## Integration
 
-- **Port**: 8040
-- **Health check**: `GET /health`
-- **Depends on**: PostgreSQL, Redis
-- **Consumes**: News feeds (to be integrated)
-- **Produces**: Sentiment signals (to trading-core)
+- **Port:** 8040 (internal)
+- **Health check:** `GET /health`
+- **Depends on:** PostgreSQL, Redis
+- **Consumes:** News feeds (to be integrated)
+- **Produces:** Sentiment signals → Trading Core (:8010) via REST
+
+### Cross-Service Contract (TODO)
+
+```
+POST /api/v1/analyze
+Body: {"text": "BTC surge expected after ETF approval"}
+Response: {"sentiment": "positive", "score": 0.82, "confidence": 0.91}
+```
+
+---
+
+## ML/NLP Notes
+
+- `SentimentAnalyzer` is a **stub** — returns uniform `0.33/0.33/0.34` distribution
+- HuggingFace `transformers` and `torch` are installed but not yet wired up
+- Next step: integrate a fine-tuned crypto-sentiment model (e.g., `Elulalysis/crypto-sentiment` or custom)
+- Model loading should happen in `on_event("startup")` to warm the model before first request
+
+---
+
+## Tooling
+
+| Tool | Config | Strictness |
+|------|--------|------------|
+| `ruff` | `pyproject.toml` | PEP 8, py311 target |
+| `mypy` | `pyproject.toml` | strict mode enabled |
+| `pytest` | `pyproject.toml` | `asyncio_mode = auto` |
+
+---
 
 ## TODO
 
-- [ ] Integrate Hugging Face sentiment model
-- [ ] Add news feed ingestion
-- [ ] Implement Redis caching for results
-- [ ] Add comprehensive integration tests
+- [ ] Integrate Hugging Face sentiment model into `SentimentAnalyzer`
+- [ ] Add news feed ingestion pipeline
+- [ ] Implement Redis caching for sentiment results
+- [ ] Add `test_sentiment_endpoint` and `test_analyze_endpoint`
 - [ ] Document ML model training/update process
+- [ ] Wire up `Settings` (currently imported but not used in routes)
